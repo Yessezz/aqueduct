@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aqueduct — Treasury Autopilot</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; background: #0A0E27; color: white; margin: 0; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  .glass { background: rgba(255,255,255,0.025); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.06); }
+  .glass-hover:hover { background: rgba(255,255,255,0.05); border-color: rgba(46,123,255,0.3); }
+  .bg-grid {
+    background-image: linear-gradient(rgba(46,123,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(46,123,255,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  @keyframes pulse-red {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,71,87,0.5); }
+    50% { box-shadow: 0 0 0 12px rgba(255,71,87,0); }
+  }
+  .pulse-red { animation: pulse-red 2s infinite; }
+  @keyframes pulse-green {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .pulse-green { animation: pulse-green 2s infinite; }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .shimmer {
+    background: linear-gradient(90deg, transparent 0%, rgba(46,123,255,0.15) 50%, transparent 100%);
+    background-size: 200% 100%;
+    animation: shimmer 3s infinite;
+  }
+  .smooth { transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1); }
+  input[type=range] { -webkit-appearance: none; background: transparent; width: 100%; }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; }
+  input[type=range]::-moz-range-track { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%; background: #2E7BFF; margin-top: -7px; box-shadow: 0 0 12px rgba(46,123,255,0.8); cursor: pointer; border: 2px solid #fff; }
+  input[type=range]::-moz-range-thumb { height: 18px; width: 18px; border-radius: 50%; background: #2E7BFF; box-shadow: 0 0 12px rgba(46,123,255,0.8); cursor: pointer; border: 2px solid #fff; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #0A0E27; }
+  ::-webkit-scrollbar-thumb { background: #1E2747; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2E7BFF; }
+  .gradient-text { background: linear-gradient(135deg, #2E7BFF 0%, #00E5A0 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .gradient-border {
+    position: relative;
+    background: #0F1530;
+  }
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(46,123,255,0.5) 0%, rgba(0,229,160,0.3) 100%);
+    border-radius: inherit;
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  .float { animation: float 3s ease-in-out infinite; }
+  .number-glow { text-shadow: 0 0 20px rgba(46,123,255,0.4); }
+  .green-glow { text-shadow: 0 0 20px rgba(0,229,160,0.5); }
+  .red-glow { text-shadow: 0 0 20px rgba(255,71,87,0.5); }
+</style>
+</head>
+<body>
+<div id="root">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'JetBrains Mono',monospace;color:#8B92A9;font-size:14px;letter-spacing:0.1em;">
+    <div style="text-align:center;">
+      <div style="font-size:24px;margin-bottom:8px;background:linear-gradient(135deg,#2E7BFF 0%,#00E5A0 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;font-weight:800;letter-spacing:0.15em;">AQUEDUCT</div>
+      <div id="boot-status">Loading modules...</div>
+    </div>
+  </div>
+</div>
+<script>
+  // Diagnostic to show what's wrong if rendering fails
+  window.addEventListener('error', function(e) {
+    var s = document.getElementById('boot-status');
+    if (s) { s.innerHTML = '<span style="color:#FF4757">ERROR:</span> ' + (e.message || 'unknown') + '<br><span style="font-size:10px;opacity:0.6">Check internet — CDN libraries failed to load. Try opening in Chrome/Firefox.</span>'; }
+  });
+  setTimeout(function() {
+    var s = document.getElementById('boot-status');
+    if (s && s.innerText === 'Loading modules...') {
+      var missing = [];
+      if (typeof React === 'undefined')   missing.push('React');
+      if (typeof ReactDOM === 'undefined')missing.push('ReactDOM');
+      if (typeof Recharts === 'undefined')missing.push('Recharts');
+      if (typeof Babel === 'undefined')   missing.push('Babel');
+      if (missing.length) { s.innerHTML = '<span style="color:#FFB547">Still loading:</span> ' + missing.join(', ') + '<br><span style="font-size:10px;opacity:0.6">Slow connection? Give it 10–15s.</span>'; }
+    }
+  }, 3000);
+</script>
+<script type="text/babel">
+
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+const { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, RadialBarChart, RadialBar } = Recharts;
+
+// ============================================================
+// COLOR PALETTE
+// ============================================================
+const C = {
+  bg: '#0A0E27', panel: '#0F1530', panel2: '#141B3D', border: '#1E2747',
+  blue: '#2E7BFF', green: '#00E5A0', red: '#FF4757', yellow: '#FFB547',
+  text: '#FFFFFF', textDim: '#8B92A9', textMid: '#B8BFD6',
+};
+
+// ============================================================
+// SYNTHETIC DATA — Virtual client "NexusPay" ($300M/yr PSP)
+// ============================================================
+const ACCOUNTS = [
+  { id: 'usd-citi', bank: 'Citi',              country: 'US', currency: 'USD', balance: 8.2,  target: 7.5, status: 'optimal' },
+  { id: 'usd-jpm',  bank: 'JPMorgan',          country: 'US', currency: 'USD', balance: 4.1,  target: 4.0, status: 'optimal' },
+  { id: 'usd-sc',   bank: 'Standard Chartered',country: 'SG', currency: 'USD', balance: 2.8,  target: 3.5, status: 'low' },
+  { id: 'usd-res',  bank: 'Reserve Pool',      country: '—',  currency: 'USD', balance: 4.0,  target: 4.0, status: 'optimal' },
+  { id: 'eur-db',   bank: 'Deutsche Bank',     country: 'DE', currency: 'EUR', balance: 3.4,  target: 3.2, status: 'optimal' },
+  { id: 'eur-bnp',  bank: 'BNP Paribas',       country: 'FR', currency: 'EUR', balance: 1.9,  target: 1.8, status: 'optimal' },
+  { id: 'kzt-hal',  bank: 'Halyk Bank',        country: 'KZ', currency: 'KZT', balance: 4.6,  target: 4.4, status: 'optimal' },
+  { id: 'kzt-ksp',  bank: 'Kaspi Bank',        country: 'KZ', currency: 'KZT', balance: 1.9,  target: 1.8, status: 'optimal' },
+  { id: 'kzt-frt',  bank: 'Forte Bank',        country: 'KZ', currency: 'KZT', balance: 0.9,  target: 1.3, status: 'low' },
+  { id: 'rub-vtb',  bank: 'VTB',               country: 'RU', currency: 'RUB', balance: 2.1,  target: 2.0, status: 'optimal' },
+  { id: 'rub-tin',  bank: 'Tinkoff',           country: 'RU', currency: 'RUB', balance: 1.1,  target: 1.2, status: 'anomaly' },
+];
+
+const COUNTRY_FLAG = { US: '🇺🇸', SG: '🇸🇬', DE: '🇩🇪', FR: '🇫🇷', KZ: '🇰🇿', RU: '🇷🇺', '—': '🌐' };
+
+const RECOMMENDATIONS = [
+  {
+    id: 1,
+    severity: 'critical',
+    title: 'Predicted EUR deficit in 47h',
+    action: 'Convert $2.0M USD → EUR via Deutsche Bank',
+    impact: '+€1,840 saved vs reactive',
+    confidence: 92,
+    explanation: [
+      { feature: 'Friday merchant payouts forecast', value: '+38% vs avg', weight: 0.41 },
+      { feature: 'EUR-DB current balance vs target', value: '€3.4M vs €5.2M needed', weight: 0.28 },
+      { feature: 'SEPA cycle (1 day)',                value: 'Fastest channel', weight: 0.18 },
+      { feature: 'FX volatility EUR/USD 24h',         value: '0.31% (low)', weight: 0.13 },
+    ],
+    route: { from: 'usd-citi', to: 'eur-db', amount: 2.0, channel: 'SEPA', eta: '24h' },
+  },
+  {
+    id: 2,
+    severity: 'opportunity',
+    title: 'Overnight yield window open',
+    action: 'Deploy $8.0M to repo at 4.85% APR (vs 3.20% Citi)',
+    impact: '+$1,073 earned tonight',
+    confidence: 95,
+    explanation: [
+      { feature: 'Idle reserve above smart minimum', value: '$8.0M free', weight: 0.39 },
+      { feature: 'Repo rate vs current MMF',         value: '4.85% vs 3.20%', weight: 0.31 },
+      { feature: 'Counterparty risk score',          value: 'AA / 12bps spread', weight: 0.20 },
+      { feature: 'T+0 liquidity guarantee',          value: 'Confirmed', weight: 0.10 },
+    ],
+    route: { from: 'usd-res', to: 'overnight-repo', amount: 8.0, channel: 'Repo', eta: 'T+0' },
+  },
+  {
+    id: 3,
+    severity: 'anomaly',
+    title: 'Unusual pattern on Tinkoff RUB-2',
+    action: 'Review 14 transactions flagged by Isolation Forest',
+    impact: 'Potential fraud / system error',
+    confidence: 78,
+    explanation: [
+      { feature: 'Transaction velocity deviation',  value: '+4.2σ from baseline', weight: 0.44 },
+      { feature: 'Counterparty diversity',          value: '14 new entities', weight: 0.27 },
+      { feature: 'Hour-of-day distribution',        value: 'Outlier (03:00–05:00)', weight: 0.19 },
+      { feature: 'Amount clustering',               value: 'Near limit threshold', weight: 0.10 },
+    ],
+    route: null,
+  },
+];
+
+// 90 days of cash-flow story
+const TIMELINE_EVENTS = [
+  { day: 8,  type: 'gap-prevented', title: 'Pre-routed $4.2M ahead of Friday spike',     value: 1240,  detail: 'LSTM detected merchant-payout surge 36h early. SEPA pre-fund saved overdraft.' },
+  { day: 23, type: 'gap-prevented', title: 'Cash gap $2.1M predicted, prevented',         value: 8400,  detail: 'Monte Carlo flagged 88% probability of EUR deficit. Auto-converted USD→EUR overnight.' },
+  { day: 41, type: 'yield',         title: 'Reserve unfrozen — overnight deploy started', value: 12800, detail: 'Safe Drawdown algo proved $11M of $15M reserve unnecessary. Yield engine engaged.' },
+  { day: 56, type: 'anomaly',       title: 'Fraud pattern blocked — $145K attempt',       value: 145000,detail: 'Isolation Forest caught coordinated micro-transactions on Tinkoff RUB. Auto-halted.' },
+  { day: 67, type: 'optimization',  title: 'FX timing — saved $4,200 on EUR conversion',  value: 4200,  detail: 'RL agent waited 6h for optimal EUR/USD window before $3M conversion.' },
+  { day: 79, type: 'gap-prevented', title: 'KZT shortfall avoided — RU holiday impact',   value: 6700,  detail: 'Calendar-aware forecast saw 3-day delay from RU holidays. Pre-funded Halyk KZT.' },
+  { day: 88, type: 'compliance',    title: 'LCR auto-rebalanced 105% → 134%',             value: 0,     detail: 'Basel III LCR breach predicted. Auto-shifted HQLA to restore ratio above policy.' },
+];
+
+// Generate 90 days of cash-flow data
+const generateCashFlow = () => {
+  const data = [];
+  let baseline = 32; // total liquidity in $M
+  for (let d = 0; d <= 90; d++) {
+    const weekday = d % 7;
+    const fridayBoost = weekday === 4 ? 1.8 : 1.0;
+    const monthEnd = (d % 30) > 26 ? 1.4 : 1.0;
+    const noise = (Math.sin(d * 0.7) + Math.cos(d * 1.3) * 0.5) * 0.8;
+    const inflow  = 4.2 * fridayBoost * monthEnd + noise;
+    const outflow = 4.1 * fridayBoost * monthEnd + noise * 0.9 + (weekday === 4 ? 1.2 : 0);
+    baseline += (inflow - outflow) * 0.3;
+    const forecast = baseline + Math.sin(d * 0.3) * 0.5;
+    const upper = forecast + 1.8 + d * 0.04;
+    const lower = forecast - 1.8 - d * 0.04;
+    data.push({
+      day: d,
+      actual: d <= 60 ? +baseline.toFixed(2) : null,
+      forecast: d >= 55 ? +forecast.toFixed(2) : null,
+      upper:    d >= 55 ? +upper.toFixed(2) : null,
+      lower:    d >= 55 ? +lower.toFixed(2) : null,
+      inflow:  +inflow.toFixed(2),
+      outflow: +outflow.toFixed(2),
+    });
+  }
+  return data;
+};
+
+const CASH_FLOW_90D = generateCashFlow();
+const CASH_FLOW_14D = CASH_FLOW_90D.slice(55, 76).map((d, i) => ({ ...d, day: i - 5 }));
+
+// ============================================================
+// HELPER COMPONENTS
+// ============================================================
+const Dot = ({ color, glow }) => (
+  <span className="inline-block w-2 h-2 rounded-full smooth"
+        style={{ background: color, boxShadow: glow ? `0 0 8px ${color}` : 'none' }} />
+);
+
+const Pill = ({ color, children, glow }) => (
+  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider"
+        style={{ background: color + '15', color: color, border: `1px solid ${color}30`, boxShadow: glow ? `0 0 12px ${color}40` : 'none' }}>
+    <Dot color={color} glow={glow}/>
+    {children}
+  </span>
+);
+
+const StatBadge = ({ label, value, delta, color = C.blue, mono = true }) => (
+  <div className="flex flex-col gap-1">
+    <span className="text-[10px] uppercase tracking-widest font-medium" style={{color: C.textDim}}>{label}</span>
+    <span className={`text-2xl font-bold ${mono ? 'mono' : ''}`} style={{ color, textShadow: `0 0 20px ${color}50` }}>{value}</span>
+    {delta && <span className="text-xs font-medium" style={{ color: delta.positive ? C.green : C.red }}>
+      {delta.positive ? '↑' : '↓'} {delta.value}
+    </span>}
+  </div>
+);
+
+const Section = ({ title, subtitle, right, children, className = '' }) => (
+  <div className={`glass rounded-2xl p-5 ${className}`}>
+    <div className="flex items-start justify-between mb-4">
+      <div>
+        <div className="text-sm font-semibold tracking-wide">{title}</div>
+        {subtitle && <div className="text-xs mt-0.5" style={{color: C.textDim}}>{subtitle}</div>}
+      </div>
+      {right}
+    </div>
+    {children}
+  </div>
+);
+
+// ============================================================
+// HEADER
+// ============================================================
+const Header = ({ view, setView }) => {
+  const tabs = [
+    { id: 'dashboard',    label: 'Live Operations', icon: '◉' },
+    { id: 'time-machine', label: 'Time Machine',    icon: '◐' },
+    { id: 'stress',       label: 'Stress Lab',      icon: '▲' },
+    { id: 'architecture', label: 'Architecture',    icon: '◇' },
+  ];
+  return (
+    <header className="sticky top-0 z-50 px-6 py-3 flex items-center justify-between"
+            style={{ background: 'rgba(10,14,39,0.85)', backdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}` }}>
+      <div className="flex items-center gap-8">
+        <div className="flex items-center gap-3">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <path d="M4 24 Q 8 8, 16 16 T 28 8" stroke={C.blue} strokeWidth="2" fill="none" strokeLinecap="round"/>
+            <path d="M4 28 Q 8 12, 16 20 T 28 12" stroke={C.green} strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.6"/>
+            <circle cx="16" cy="16" r="2" fill={C.blue}/>
+          </svg>
+          <div>
+            <div className="text-lg font-bold tracking-tight gradient-text">AQUEDUCT</div>
+            <div className="text-[9px] uppercase tracking-[0.2em] -mt-0.5" style={{color: C.textDim}}>Treasury Autopilot</div>
+          </div>
+        </div>
+        <nav className="flex items-center gap-1">
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setView(t.id)}
+                    className="px-4 py-2 rounded-lg text-sm font-medium smooth"
+                    style={{
+                      background: view === t.id ? `${C.blue}20` : 'transparent',
+                      color: view === t.id ? C.blue : C.textMid,
+                      border: `1px solid ${view === t.id ? C.blue + '40' : 'transparent'}`,
+                    }}>
+              <span className="mr-2 opacity-60">{t.icon}</span>{t.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 text-xs mono" style={{color: C.textDim}}>
+          <Dot color={C.green} glow/>
+          <span>LIVE · NexusPay Treasury</span>
+        </div>
+        <div className="px-3 py-1.5 rounded-lg glass text-xs">
+          <span style={{color: C.textDim}}>Health Score</span>
+          <span className="ml-2 font-bold mono" style={{color: C.green, textShadow: `0 0 12px ${C.green}80`}}>8.7</span>
+          <span style={{color: C.textDim}} className="mono">/10</span>
+        </div>
+      </div>
+    </header>
+  );
+};
+
+// ============================================================
+// KPI BAR
+// ============================================================
+const KPIBar = () => (
+  <div className="grid grid-cols-5 gap-3 mb-4">
+    <Section title="" className="!p-4">
+      <StatBadge label="Total Liquidity" value="$32.5M" delta={{ positive: true, value: '+$0.8M today' }} color={C.text}/>
+    </Section>
+    <Section title="" className="!p-4">
+      <StatBadge label="Smart Reserve" value="$4.0M" delta={{ positive: true, value: '−$11M vs static' }} color={C.green}/>
+    </Section>
+    <Section title="" className="!p-4">
+      <StatBadge label="Deployed (Earning)" value="$11.0M" delta={{ positive: true, value: '4.85% APR' }} color={C.blue}/>
+    </Section>
+    <Section title="" className="!p-4">
+      <StatBadge label="Yield Earned MTD" value="$22,840" delta={{ positive: true, value: '+18% vs target' }} color={C.green}/>
+    </Section>
+    <Section title="" className="!p-4">
+      <StatBadge label="Cash Gap Risk (7d)" value="3.2%" delta={{ positive: false, value: '−14pp vs baseline' }} color={C.yellow}/>
+    </Section>
+  </div>
+);
+
+// ============================================================
+// ACCOUNT MAP
+// ============================================================
+const AccountCard = ({ a }) => {
+  const statusColor = a.status === 'optimal' ? C.green : a.status === 'low' ? C.yellow : C.red;
+  const utilization = (a.balance / a.target) * 100;
+  return (
+    <div className="glass glass-hover rounded-xl p-3 smooth cursor-pointer" style={{ borderColor: statusColor + '20' }}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{COUNTRY_FLAG[a.country]}</span>
+          <div>
+            <div className="text-xs font-semibold">{a.bank}</div>
+            <div className="text-[10px] mono" style={{color: C.textDim}}>{a.currency} · {a.id.toUpperCase()}</div>
+          </div>
+        </div>
+        <Dot color={statusColor} glow={a.status !== 'optimal'}/>
+      </div>
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="mono font-bold text-base">{a.balance}M</span>
+        <span className="text-[10px] mono" style={{color: C.textDim}}>tgt {a.target}M</span>
+      </div>
+      <div className="h-1 rounded-full overflow-hidden" style={{background: C.border}}>
+        <div className="h-full smooth" style={{
+          width: `${Math.min(utilization, 100)}%`,
+          background: statusColor,
+          boxShadow: `0 0 8px ${statusColor}`
+        }}/>
+      </div>
+    </div>
+  );
+};
+
+const AccountMap = () => (
+  <Section title="Account Map" subtitle="11 accounts · 4 currencies · 6 jurisdictions"
+           right={<Pill color={C.green} glow>9 OPTIMAL</Pill>}>
+    <div className="grid grid-cols-4 gap-2">
+      {ACCOUNTS.map(a => <AccountCard key={a.id} a={a}/>)}
+    </div>
+  </Section>
+);
+
+// ============================================================
+// CASH-FLOW FORECAST CHART
+// ============================================================
+const CashFlowForecast = () => {
+  return (
+    <Section title="Cash-Flow Forecast" subtitle="14-day horizon · MAPE 6.8% · Confidence interval 95%"
+             right={<div className="flex gap-3 text-[10px]">
+               <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5" style={{background:C.green}}/>Actual</span>
+               <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5" style={{background:C.blue}}/>Forecast</span>
+               <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-2 rounded-sm" style={{background:C.blue, opacity:0.15}}/>CI 95%</span>
+             </div>}>
+      <div style={{height: 220}}>
+        <ResponsiveContainer>
+          <ComposedChart data={CASH_FLOW_14D} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="gradActual" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={C.green} stopOpacity={0.4}/>
+                <stop offset="100%" stopColor={C.green} stopOpacity={0}/>
+              </linearGradient>
+              <linearGradient id="gradCI" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={C.blue} stopOpacity={0.25}/>
+                <stop offset="100%" stopColor={C.blue} stopOpacity={0.02}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke={C.border} strokeDasharray="2 4" vertical={false}/>
+            <XAxis dataKey="day" stroke={C.textDim} fontSize={10} tickFormatter={d => d === 0 ? 'Today' : (d > 0 ? `+${d}d` : `${d}d`)}/>
+            <YAxis stroke={C.textDim} fontSize={10} tickFormatter={v => `$${v}M`}/>
+            <Tooltip contentStyle={{background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11}}/>
+            <Area type="monotone" dataKey="upper" stroke="none" fill="url(#gradCI)"/>
+            <Area type="monotone" dataKey="lower" stroke="none" fill={C.bg}/>
+            <Area type="monotone" dataKey="actual" stroke={C.green} strokeWidth={2.5} fill="url(#gradActual)"/>
+            <Line type="monotone" dataKey="forecast" stroke={C.blue} strokeWidth={2.5} strokeDasharray="4 3" dot={false}/>
+            <ReferenceLine x={0} stroke={C.textDim} strokeDasharray="2 2" label={{ value: 'NOW', fill: C.textDim, fontSize: 10, position: 'top' }}/>
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </Section>
+  );
+};
+
+// ============================================================
+// RECOMMENDATIONS (with SHAP)
+// ============================================================
+const SeverityMeta = {
+  critical:    { color: C.red,    label: 'CRITICAL',    icon: '⚠' },
+  opportunity: { color: C.green,  label: 'OPPORTUNITY', icon: '◆' },
+  anomaly:     { color: C.yellow, label: 'ANOMALY',     icon: '◈' },
+};
+
+const RecommendationCard = ({ r, expanded, onToggle, onApprove, approved }) => {
+  const meta = SeverityMeta[r.severity];
+  return (
+    <div className="glass rounded-xl p-4 smooth"
+         style={{ borderColor: meta.color + '30', boxShadow: expanded ? `0 0 24px ${meta.color}20` : 'none' }}>
+      <div className="flex items-start justify-between gap-3 cursor-pointer" onClick={onToggle}>
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <Pill color={meta.color} glow={r.severity === 'critical'}>{meta.icon} {meta.label}</Pill>
+            <span className="text-[10px] mono" style={{color: C.textDim}}>conf {r.confidence}%</span>
+          </div>
+          <div className="text-sm font-semibold mb-0.5">{r.title}</div>
+          <div className="text-xs" style={{color: C.textMid}}>{r.action}</div>
+          <div className="text-xs mt-1 font-medium" style={{color: meta.color}}>{r.impact}</div>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          {!approved ? (
+            <button onClick={(e)=>{e.stopPropagation(); onApprove();}}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold smooth hover:opacity-80"
+                    style={{ background: meta.color, color: C.bg }}>
+              Approve
+            </button>
+          ) : (
+            <span className="text-xs mono px-2 py-1 rounded" style={{color:C.green, background:C.green+'15'}}>✓ EXECUTED</span>
+          )}
+          <span className="text-[10px]" style={{color: C.textDim}}>{expanded ? '▲ collapse' : '▼ why?'}</span>
+        </div>
+      </div>
+      {expanded && (
+        <div className="mt-4 pt-4 border-t" style={{borderColor: C.border}}>
+          <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{color: C.textDim}}>
+            SHAP Feature Attribution — why the model decided this
+          </div>
+          <div className="space-y-2">
+            {r.explanation.map((e, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <div className="flex-1">
+                  <div className="text-xs font-medium">{e.feature}</div>
+                  <div className="text-[10px] mono" style={{color: C.textDim}}>{e.value}</div>
+                </div>
+                <div className="w-32 h-2 rounded-full overflow-hidden" style={{background: C.border}}>
+                  <div className="h-full smooth" style={{
+                    width: `${e.weight * 100}%`,
+                    background: meta.color,
+                    boxShadow: `0 0 6px ${meta.color}80`
+                  }}/>
+                </div>
+                <span className="mono text-xs font-semibold w-10 text-right" style={{color: meta.color}}>
+                  {(e.weight * 100).toFixed(0)}%
+                </span>
+              </div>
+            ))}
+          </div>
+          {r.route && (
+            <div className="mt-3 pt-3 border-t flex items-center gap-2 text-xs mono" style={{borderColor: C.border, color: C.textDim}}>
+              <span>{r.route.from.toUpperCase()}</span>
+              <span style={{color: meta.color}}>──▶</span>
+              <span>{r.route.to.toUpperCase()}</span>
+              <span className="ml-auto">${r.route.amount}M · {r.route.channel} · ETA {r.route.eta}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const RecommendationsPanel = () => {
+  const [expandedId, setExpandedId] = useState(1);
+  const [approved, setApproved] = useState({});
+  return (
+    <Section title="Aqueduct Recommends" subtitle={`${RECOMMENDATIONS.length - Object.keys(approved).length} awaiting · ${Object.keys(approved).length} executed`}
+             right={<Pill color={C.blue}>AI · v2.4</Pill>}>
+      <div className="space-y-3">
+        {RECOMMENDATIONS.map(r => (
+          <RecommendationCard key={r.id} r={r}
+                              expanded={expandedId === r.id}
+                              onToggle={() => setExpandedId(expandedId === r.id ? null : r.id)}
+                              onApprove={() => setApproved({...approved, [r.id]: true})}
+                              approved={approved[r.id]}/>
+        ))}
+      </div>
+    </Section>
+  );
+};
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+const Dashboard = () => (
+  <div className="px-6 py-4">
+    <KPIBar/>
+    <div className="grid grid-cols-3 gap-4">
+      <div className="col-span-2 space-y-4">
+        <CashFlowForecast/>
+        <AccountMap/>
+      </div>
+      <div>
+        <RecommendationsPanel/>
+      </div>
+    </div>
+  </div>
+);
+
+// ============================================================
+// TIME MACHINE — the killer demo
+// ============================================================
+const TimeMachine = () => {
+  const [day, setDay] = useState(90);
+  const [playing, setPlaying] = useState(false);
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    if (playing) {
+      intervalRef.current = setInterval(() => {
+        setDay(d => {
+          if (d >= 90) { setPlaying(false); return 90; }
+          return d + 1;
+        });
+      }, 80);
+    } else {
+      clearInterval(intervalRef.current);
+    }
+    return () => clearInterval(intervalRef.current);
+  }, [playing]);
+
+  const eventsUpToDay = TIMELINE_EVENTS.filter(e => e.day <= day);
+  const cumulativeSaved = eventsUpToDay.reduce((sum, e) => sum + e.value, 0);
+  const lastEvent = eventsUpToDay[eventsUpToDay.length - 1];
+  const dataUpToDay = CASH_FLOW_90D.slice(0, day + 1);
+
+  const eventTypeMeta = {
+    'gap-prevented': { color: C.red,    label: 'Cash gap prevented', icon: '🛡' },
+    'yield':         { color: C.green,  label: 'Yield generated',    icon: '◆' },
+    'anomaly':       { color: C.yellow, label: 'Anomaly blocked',    icon: '◈' },
+    'optimization':  { color: C.blue,   label: 'Optimization',       icon: '◉' },
+    'compliance':    { color: '#A66DFF',label: 'Compliance auto-fix',icon: '◇' },
+  };
+
+  const resetDemo = () => { setDay(0); setPlaying(true); };
+
+  return (
+    <div className="px-6 py-4">
+      <div className="glass rounded-2xl p-6 mb-4 bg-grid">
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.3em] mb-1" style={{color: C.blue}}>◐ Time Machine</div>
+            <h1 className="text-3xl font-bold tracking-tight">90 days with Aqueduct</h1>
+            <p className="text-sm mt-1" style={{color: C.textDim}}>
+              Replay the last quarter of NexusPay treasury. Every saved dollar. Every blocked risk. Every yield event.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setPlaying(!playing)}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold smooth"
+                    style={{ background: playing ? C.red + '30' : C.blue, color: playing ? C.red : C.bg, border: `1px solid ${playing ? C.red : C.blue}` }}>
+              {playing ? '◼ Pause' : '▶ Play'}
+            </button>
+            <button onClick={resetDemo}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold smooth glass">
+              ⟲ Reset
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-4 mt-6">
+          <div className="glass rounded-xl p-4">
+            <div className="text-[10px] uppercase tracking-widest" style={{color:C.textDim}}>Replay day</div>
+            <div className="text-3xl font-bold mono number-glow">{day}<span className="text-base ml-1" style={{color:C.textDim}}>/90</span></div>
+          </div>
+          <div className="glass rounded-xl p-4">
+            <div className="text-[10px] uppercase tracking-widest" style={{color:C.textDim}}>Events triggered</div>
+            <div className="text-3xl font-bold mono" style={{color:C.blue, textShadow:`0 0 16px ${C.blue}80`}}>{eventsUpToDay.length}</div>
+          </div>
+          <div className="glass rounded-xl p-4">
+            <div className="text-[10px] uppercase tracking-widest" style={{color:C.textDim}}>Cumulative saved</div>
+            <div className="text-3xl font-bold mono green-glow" style={{color:C.green}}>
+              ${(cumulativeSaved/1000).toFixed(1)}K
+            </div>
+          </div>
+          <div className="glass rounded-xl p-4">
+            <div className="text-[10px] uppercase tracking-widest" style={{color:C.textDim}}>Yield earned</div>
+            <div className="text-3xl font-bold mono green-glow" style={{color:C.green}}>
+              ${Math.round(day * 280).toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <Section title="Treasury reconstruction" subtitle="Scrub the slider to replay each day. Markers show automated interventions.">
+        <div style={{height: 280}}>
+          <ResponsiveContainer>
+            <AreaChart data={dataUpToDay} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="ga" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={C.blue} stopOpacity={0.5}/>
+                  <stop offset="100%" stopColor={C.blue} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke={C.border} strokeDasharray="2 4" vertical={false}/>
+              <XAxis dataKey="day" stroke={C.textDim} fontSize={10} domain={[0, 90]} type="number"/>
+              <YAxis stroke={C.textDim} fontSize={10} tickFormatter={v => `$${v}M`}/>
+              <Tooltip contentStyle={{background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11}}/>
+              <Area type="monotone" dataKey="actual" stroke={C.blue} strokeWidth={2} fill="url(#ga)"/>
+              {eventsUpToDay.map((e, i) => {
+                const m = eventTypeMeta[e.type];
+                return <ReferenceLine key={i} x={e.day} stroke={m.color} strokeDasharray="3 2" strokeWidth={1.5}/>;
+              })}
+              <ReferenceLine x={day} stroke={C.green} strokeWidth={2}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="mt-4">
+          <input type="range" min="0" max="90" value={day} onChange={(e) => { setDay(+e.target.value); setPlaying(false); }} className="w-full"/>
+          <div className="flex justify-between text-[10px] mono mt-1" style={{color:C.textDim}}>
+            <span>Day 0 — Feb 14</span>
+            <span>Day 30</span>
+            <span>Day 60</span>
+            <span>Day 90 — May 16</span>
+          </div>
+        </div>
+      </Section>
+
+      <div className="grid grid-cols-2 gap-4 mt-4">
+        <Section title="Event log" subtitle={`${eventsUpToDay.length} of ${TIMELINE_EVENTS.length} interventions replayed`}>
+          <div className="space-y-2 max-h-[280px] overflow-y-auto">
+            {TIMELINE_EVENTS.map((e, i) => {
+              const m = eventTypeMeta[e.type];
+              const past = e.day <= day;
+              return (
+                <div key={i} className="flex items-start gap-3 p-3 rounded-lg smooth"
+                     style={{ background: past ? m.color + '08' : 'transparent', opacity: past ? 1 : 0.3, border: `1px solid ${past ? m.color + '20' : C.border}` }}>
+                  <div className="mono text-[10px] font-bold px-2 py-1 rounded" style={{background: m.color+'20', color: m.color}}>
+                    D{e.day.toString().padStart(2,'0')}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <Pill color={m.color}>{m.label}</Pill>
+                      {e.value > 0 && <span className="mono text-xs font-bold" style={{color:m.color}}>+${e.value.toLocaleString()}</span>}
+                    </div>
+                    <div className="text-xs mt-1 font-medium">{e.title}</div>
+                    <div className="text-[11px] mt-0.5" style={{color: C.textDim}}>{e.detail}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+
+        <Section title="Quarterly impact" subtitle="What Aqueduct delivered to NexusPay">
+          <div className="space-y-3">
+            {[
+              { label: 'Cash gaps prevented', value: '3', sub: 'Total exposure $6.4M avoided', color: C.red },
+              { label: 'Fraud blocked',       value: '$145K', sub: 'Isolation Forest · auto-halt', color: C.yellow },
+              { label: 'Yield generated',     value: '$25,200', sub: 'Overnight repo · 4.85% avg', color: C.green },
+              { label: 'Optimization wins',   value: '$4,200', sub: 'FX timing & route arb', color: C.blue },
+              { label: 'Compliance auto-fixes', value: '1', sub: 'LCR restored 105%→134%', color: '#A66DFF' },
+            ].map((s, i) => (
+              <div key={i} className="flex items-center justify-between p-3 rounded-lg glass">
+                <div>
+                  <div className="text-xs" style={{color:C.textDim}}>{s.label}</div>
+                  <div className="text-[10px] mt-0.5" style={{color:C.textDim}}>{s.sub}</div>
+                </div>
+                <div className="mono text-xl font-bold" style={{color: s.color, textShadow:`0 0 12px ${s.color}60`}}>{s.value}</div>
+              </div>
+            ))}
+            <div className="p-4 rounded-xl mt-3 gradient-border">
+              <div className="text-[10px] uppercase tracking-widest mb-1" style={{color:C.textDim}}>Total quarterly net value</div>
+              <div className="mono text-4xl font-black green-glow" style={{color:C.green}}>+$340,800</div>
+              <div className="text-xs mt-1" style={{color:C.textMid}}>per virtual client, in 90 days</div>
+            </div>
+          </div>
+        </Section>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// STRESS LAB
+// ============================================================
+const StressLab = () => {
+  const [swiftDelay, setSwiftDelay] = useState(0);   // 0-7 days
+  const [payoutSpike, setPayoutSpike] = useState(0); // 0-50%
+  const [fxVol, setFxVol] = useState(0);             // 0-30%
+
+  // Simulate stress impact
+  const baseGapProb = 3.2;
+  const gapProb = Math.min(99, baseGapProb + swiftDelay * 6 + payoutSpike * 0.8 + fxVol * 0.3);
+  const baseLCR = 134;
+  const lcr = Math.max(70, baseLCR - swiftDelay * 4 - payoutSpike * 0.6 - fxVol * 0.2);
+  const baseNSFR = 118;
+  const nsfr = Math.max(80, baseNSFR - swiftDelay * 2 - payoutSpike * 0.4 - fxVol * 0.15);
+  const maxOverdraft = Math.max(0, swiftDelay * 0.4 + payoutSpike * 0.06 + fxVol * 0.02);
+  const recommendedBuffer = Math.max(4, 4 + swiftDelay * 0.6 + payoutSpike * 0.08);
+
+  // Stressed forecast
+  const stressedForecast = useMemo(() => {
+    return CASH_FLOW_14D.map((d, i) => {
+      const stressFactor = (swiftDelay * 0.15 + payoutSpike * 0.012 + fxVol * 0.008);
+      const stressed = (d.forecast ?? d.actual ?? 32) - i * stressFactor;
+      return { ...d, stressed: +stressed.toFixed(2) };
+    });
+  }, [swiftDelay, payoutSpike, fxVol]);
+
+  const Gauge = ({ label, value, suffix, max, danger, warn, color }) => {
+    const pct = Math.min(100, (value / max) * 100);
+    const c = value > danger ? C.red : value > warn ? C.yellow : color;
+    return (
+      <div className="glass rounded-xl p-4">
+        <div className="text-[10px] uppercase tracking-widest mb-2" style={{color: C.textDim}}>{label}</div>
+        <div className="flex items-baseline gap-1">
+          <span className="mono text-3xl font-bold smooth" style={{ color: c, textShadow: `0 0 14px ${c}80` }}>{value.toFixed(1)}</span>
+          <span className="mono text-sm" style={{ color: C.textDim }}>{suffix}</span>
+        </div>
+        <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: C.border }}>
+          <div className="h-full smooth" style={{ width: `${pct}%`, background: c, boxShadow: `0 0 8px ${c}` }}/>
+        </div>
+      </div>
+    );
+  };
+
+  const SliderRow = ({ label, value, setValue, min, max, unit, hint, color }) => (
+    <div className="glass rounded-xl p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <div className="text-sm font-semibold">{label}</div>
+          <div className="text-[10px]" style={{color: C.textDim}}>{hint}</div>
+        </div>
+        <div className="mono text-2xl font-bold" style={{ color, textShadow: `0 0 12px ${color}80` }}>
+          {value}{unit}
+        </div>
+      </div>
+      <input type="range" min={min} max={max} value={value} onChange={(e) => setValue(+e.target.value)} className="w-full"/>
+      <div className="flex justify-between text-[10px] mono mt-1" style={{color: C.textDim}}>
+        <span>{min}{unit}</span>
+        <span>{max}{unit}</span>
+      </div>
+    </div>
+  );
+
+  const verdict = gapProb < 15 ? { color: C.green,  label: 'SYSTEM STABLE',   detail: 'Aqueduct withstands the scenario without overdraft.' }
+               : gapProb < 50 ? { color: C.yellow, label: 'ELEVATED RISK',   detail: 'Pre-fund EUR-DB and increase smart reserve to $6M.' }
+                              : { color: C.red,    label: 'CRITICAL EXPOSURE',detail: 'Overdraft inevitable. Tap credit line or pause non-critical payouts.' };
+
+  return (
+    <div className="px-6 py-4">
+      <div className="glass rounded-2xl p-6 mb-4 bg-grid">
+        <div className="text-[10px] uppercase tracking-[0.3em] mb-1" style={{color: C.blue}}>▲ Stress Lab</div>
+        <h1 className="text-3xl font-bold tracking-tight">Monte Carlo · 10,000 scenarios</h1>
+        <p className="text-sm mt-1" style={{color: C.textDim}}>
+          Stress the system in real time. Aqueduct recomputes LCR, NSFR, gap probability and recommended buffer instantly.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        <SliderRow label="SWIFT delay" value={swiftDelay} setValue={setSwiftDelay} min={0} max={7} unit="d" hint="Extra clearing days on inbound flows" color={C.blue}/>
+        <SliderRow label="Payout spike" value={payoutSpike} setValue={setPayoutSpike} min={0} max={50} unit="%" hint="Unexpected merchant payout surge" color={C.yellow}/>
+        <SliderRow label="FX volatility" value={fxVol} setValue={setFxVol} min={0} max={30} unit="%" hint="EUR/USD intraday swing" color="#A66DFF"/>
+      </div>
+
+      <div className="grid grid-cols-4 gap-3 mb-4">
+        <Gauge label="Cash-gap probability (7d)" value={gapProb} suffix="%"  max={100} danger={50} warn={20} color={C.green}/>
+        <Gauge label="LCR (Basel III · min 100%)"  value={lcr}    suffix="%"  max={150} danger={100} warn={110} color={C.green}/>
+        <Gauge label="NSFR (Basel III · min 100%)" value={nsfr}   suffix="%"  max={150} danger={100} warn={110} color={C.green}/>
+        <Gauge label="Max overdraft needed" value={maxOverdraft} suffix="M" max={10}  danger={3}   warn={1}   color={C.green}/>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        <Section title="Stressed 14-day forecast" subtitle="Blue: base · Red: under stress" className="col-span-2">
+          <div style={{height: 220}}>
+            <ResponsiveContainer>
+              <ComposedChart data={stressedForecast} margin={{top: 10, right: 10, left: 0, bottom: 0}}>
+                <CartesianGrid stroke={C.border} strokeDasharray="2 4" vertical={false}/>
+                <XAxis dataKey="day" stroke={C.textDim} fontSize={10}/>
+                <YAxis stroke={C.textDim} fontSize={10} tickFormatter={v => `$${v}M`}/>
+                <Tooltip contentStyle={{background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11}}/>
+                <Line type="monotone" dataKey="forecast"  stroke={C.blue} strokeWidth={2} strokeDasharray="4 3" dot={false}/>
+                <Line type="monotone" dataKey="stressed" stroke={C.red}  strokeWidth={2.5} dot={false}/>
+                <ReferenceLine y={recommendedBuffer} stroke={C.yellow} strokeDasharray="2 4" label={{ value: `Buffer $${recommendedBuffer.toFixed(1)}M`, fill: C.yellow, fontSize: 10, position: 'right' }}/>
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </Section>
+
+        <Section title="Aqueduct verdict" subtitle="Auto-generated mitigation plan">
+          <div className="rounded-xl p-4 mb-3" style={{ background: verdict.color + '15', border: `1px solid ${verdict.color}40`, boxShadow: `0 0 24px ${verdict.color}30` }}>
+            <Pill color={verdict.color} glow>{verdict.label}</Pill>
+            <div className="text-sm mt-2 font-medium">{verdict.detail}</div>
+          </div>
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between p-2 rounded glass">
+              <span style={{color: C.textDim}}>Recommended smart reserve</span>
+              <span className="mono font-bold" style={{color: C.blue}}>${recommendedBuffer.toFixed(1)}M</span>
+            </div>
+            <div className="flex justify-between p-2 rounded glass">
+              <span style={{color: C.textDim}}>Yield-deployable surplus</span>
+              <span className="mono font-bold" style={{color: C.green}}>${Math.max(0, 15 - recommendedBuffer).toFixed(1)}M</span>
+            </div>
+            <div className="flex justify-between p-2 rounded glass">
+              <span style={{color: C.textDim}}>Scenarios simulated</span>
+              <span className="mono font-bold">10,000</span>
+            </div>
+            <div className="flex justify-between p-2 rounded glass">
+              <span style={{color: C.textDim}}>VaR @ 95% confidence</span>
+              <span className="mono font-bold" style={{color: C.yellow}}>${(maxOverdraft * 1.5 + 0.4).toFixed(2)}M</span>
+            </div>
+          </div>
+        </Section>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// ARCHITECTURE — the 5 layers
+// ============================================================
+const Architecture = () => {
+  const layers = [
+    { id: 'predict',  name: 'PREDICT',  color: C.blue,    tagline: 'Sees the future',
+      desc: 'Hybrid ensemble (Prophet + LSTM + XGBoost) forecasts cash flow 1–14d ahead with 95% confidence intervals.',
+      tech: ['Prophet', 'PyTorch LSTM', 'XGBoost', 'Stacking meta-learner'], output: 'Forecasts · CI bands · MAPE 6.8%' },
+    { id: 'protect',  name: 'PROTECT',  color: C.red,     tagline: 'Guards against risk',
+      desc: 'Monte Carlo runs 10,000 scenarios. Computes Basel III LCR/NSFR. Isolation Forest flags anomalies in real time.',
+      tech: ['Monte Carlo', 'Basel III LCR/NSFR', 'Isolation Forest', 'Stress engine'], output: 'Risk score · VaR95 · Alerts' },
+    { id: 'optimize', name: 'OPTIMIZE', color: '#A66DFF', tagline: 'Routes capital',
+      desc: 'Reinforcement Learning agent (PPO) learns optimal liquidity routing across 10–50 accounts and clearing channels.',
+      tech: ['PPO Reinforcement Learning', 'Multi-arm bandit', 'Linear programming'], output: 'Route plan · Cost/time optimal' },
+    { id: 'earn',     name: 'EARN',     color: C.green,   tagline: 'Turns idle into yield',
+      desc: 'Deploys freed reserves into overnight, MMF, and repo. FX timing optimizer for cross-currency conversions.',
+      tech: ['Yield optimizer', 'Repo API', 'FX timing model', 'Counterparty scoring'], output: 'Avg APR 4.85% · T+0' },
+    { id: 'explain',  name: 'EXPLAIN',  color: C.yellow,  tagline: 'Makes AI trustable',
+      desc: 'SHAP feature attribution converts every model decision into human-readable rationale. No black boxes.',
+      tech: ['SHAP', 'Counterfactual generation', 'NL templating', 'Audit log'], output: 'Why · What-if · Trail' },
+  ];
+
+  return (
+    <div className="px-6 py-4">
+      <div className="glass rounded-2xl p-6 mb-4 bg-grid">
+        <div className="text-[10px] uppercase tracking-[0.3em] mb-1" style={{color: C.blue}}>◇ Architecture</div>
+        <h1 className="text-3xl font-bold tracking-tight">5 layers. One autonomous treasury OS.</h1>
+        <p className="text-sm mt-1" style={{color: C.textDim}}>
+          Each layer is independent, replaceable, and explainable. Data flows top-down, recommendations bubble back up.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {layers.map((l, i) => (
+          <div key={l.id} className="glass rounded-xl p-5 smooth flex items-center gap-6"
+               style={{ borderLeft: `4px solid ${l.color}` }}>
+            <div className="flex-shrink-0 w-24 text-center">
+              <div className="mono text-[10px]" style={{color: C.textDim}}>LAYER {i+1}</div>
+              <div className="text-2xl font-black tracking-tight mt-1" style={{color: l.color, textShadow: `0 0 16px ${l.color}80`}}>{l.name}</div>
+            </div>
+            <div className="flex-1">
+              <div className="text-sm font-semibold mb-1" style={{color: l.color}}>{l.tagline}</div>
+              <div className="text-sm mb-3" style={{color: C.textMid}}>{l.desc}</div>
+              <div className="flex flex-wrap gap-2">
+                {l.tech.map(t => (
+                  <span key={t} className="px-2.5 py-1 rounded mono text-[10px]"
+                        style={{background: l.color + '15', color: l.color, border: `1px solid ${l.color}30`}}>{t}</span>
+                ))}
+              </div>
+            </div>
+            <div className="flex-shrink-0 text-right">
+              <div className="text-[10px] uppercase tracking-widest" style={{color: C.textDim}}>Output</div>
+              <div className="text-xs font-medium mt-1 mono" style={{color: l.color}}>{l.output}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mt-4">
+        <Section title="Data flow" subtitle="How information moves through the stack">
+          <div className="space-y-3 text-xs">
+            <div className="flex items-center gap-3"><span className="mono w-6" style={{color:C.blue}}>1.</span><span>Bank APIs stream live balances and transactions every 60s</span></div>
+            <div className="flex items-center gap-3"><span className="mono w-6" style={{color:C.blue}}>2.</span><span>PREDICT generates rolling forecasts with confidence intervals</span></div>
+            <div className="flex items-center gap-3"><span className="mono w-6" style={{color:C.blue}}>3.</span><span>PROTECT stress-tests the forecast against 10K scenarios</span></div>
+            <div className="flex items-center gap-3"><span className="mono w-6" style={{color:C.blue}}>4.</span><span>OPTIMIZE proposes routing plans, EARN proposes yield plans</span></div>
+            <div className="flex items-center gap-3"><span className="mono w-6" style={{color:C.blue}}>5.</span><span>EXPLAIN wraps each proposal with SHAP rationale</span></div>
+            <div className="flex items-center gap-3"><span className="mono w-6" style={{color:C.blue}}>6.</span><span>Treasurer approves or rejects · audit trail persisted</span></div>
+          </div>
+        </Section>
+        <Section title="Tech stack" subtitle="Production-grade tooling">
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {[
+              ['Backend', 'Python · FastAPI'],
+              ['ML', 'PyTorch · scikit-learn'],
+              ['Forecasting', 'Prophet · Stable-Baselines3'],
+              ['Explainability', 'SHAP'],
+              ['Frontend', 'React · TypeScript'],
+              ['Charts', 'Recharts · D3'],
+              ['Database', 'PostgreSQL · Redis'],
+              ['Infra', 'Docker · AWS'],
+            ].map(([k, v]) => (
+              <div key={k} className="p-2 rounded glass">
+                <div className="text-[10px]" style={{color: C.textDim}}>{k}</div>
+                <div className="text-xs font-semibold mono">{v}</div>
+              </div>
+            ))}
+          </div>
+        </Section>
+        <Section title="Why this stack" subtitle="Defensible technical choices">
+          <div className="space-y-2 text-xs" style={{color: C.textMid}}>
+            <p><b style={{color:C.text}}>Ensemble forecasting</b> beats single models on financial time series (Makridakis competitions, 2020).</p>
+            <p><b style={{color:C.text}}>PPO over DQN</b> for continuous action spaces — better for amount-based routing decisions.</p>
+            <p><b style={{color:C.text}}>SHAP over LIME</b> — game-theoretic foundation, consistent attribution.</p>
+            <p><b style={{color:C.text}}>Basel III built-in</b> — moat for clients on regulatory path to banking license.</p>
+          </div>
+        </Section>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// MAIN APP
+// ============================================================
+const App = () => {
+  const [view, setView] = useState('dashboard');
+  return (
+    <div className="min-h-screen" style={{ background: C.bg, color: C.text }}>
+      <Header view={view} setView={setView}/>
+      <main>
+        {view === 'dashboard'    && <Dashboard/>}
+        {view === 'time-machine' && <TimeMachine/>}
+        {view === 'stress'       && <StressLab/>}
+        {view === 'architecture' && <Architecture/>}
+      </main>
+      <footer className="px-6 py-6 mt-4 text-center text-[10px]" style={{color: C.textDim, borderTop: `1px solid ${C.border}`}}>
+        <span className="mono">AQUEDUCT v0.4 · MVP demo · Synthetic data based on real fintech treasury patterns · SynergyX Hackathon 2026</span>
+      </footer>
+    </div>
+  );
+};
+
+try {
+  ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+} catch (err) {
+  document.getElementById('root').innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:monospace;color:#FF4757;padding:20px;text-align:center;">' +
+    '<div><div style="font-size:18px;margin-bottom:8px;">RENDER ERROR</div>' +
+    '<div style="font-size:12px;color:#8B92A9;max-width:600px;">' + (err.message || err) + '</div></div></div>';
+  console.error(err);
+}
+
+</script>
+</body>
+</html>
